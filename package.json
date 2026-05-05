@@ -6,6 +6,14 @@
   "type": "module",
   "keywords": ["pi-package", "pi", "telegram", "bot", "extension", "multiplexer"],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/implicit-invocation/pi-telegram-multiplexer.git"
+  },
+  "homepage": "https://github.com/implicit-invocation/pi-telegram-multiplexer",
+  "bugs": {
+    "url": "https://github.com/implicit-invocation/pi-telegram-multiplexer/issues"
+  },
   "pi": {
     "extensions": ["./index.ts"]
   },

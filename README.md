@@ -5,7 +5,7 @@ A pi package that lets one Telegram bot control multiple pi instances across mul
 ## Install
 
 ```bash
-pi install git:github.com/your-user/pi-telegram-multiplexer
+pi install git:github.com/implicit-invocation/pi-telegram-multiplexer
 # or from a local checkout
 pi install /path/to/pi-telegram-multiplexer
 ```
