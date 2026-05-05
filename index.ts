@@ -105,7 +105,7 @@ export default function (pi: ExtensionAPI) {
 			config = { ...next, workspacesRoot: root, wizardDone: true };
 			await writeConfig(config);
 			ctx.ui.notify(`Telegram multiplexer configured for @${config.botUsername ?? "bot"}; workspaces root: ${root}`, "info");
-			await ensureServerAndConnect(ctx, true);
+			await ensureServerAndConnect(ctx);
 		} catch (error) {
 			ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		} finally {
