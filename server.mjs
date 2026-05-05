@@ -17,7 +17,7 @@ const HEARTBEAT_MS = 15_000;
 const STALE_MS = 45_000;
 const TYPING_INTERVAL_MS = 4_000;
 const TYPING_MAX_MS = 10 * 60_000;
-const SERVER_PROTOCOL_VERSION = 8;
+const SERVER_PROTOCOL_VERSION = 9;
 
 const token = process.env.TELEMULTI_SERVER_TOKEN || randomBytes(24).toString("hex");
 const packageRoot = dirname(new URL(import.meta.url).pathname);
@@ -169,9 +169,9 @@ function spawnPi(workspacePath) {
 	const command = process.env.TELEMULTI_PI_COMMAND || "pi";
 	const installedPackage = packageRoot.includes(`${PI_AGENT_DIR}/git/`) || packageRoot.includes(`${PI_AGENT_DIR}/npm/`);
 	const args = installedPackage ? ["--mode", "rpc"] : ["--mode", "rpc", "-e", packageRoot];
-	const child = spawn(command, args, { cwd: key, detached: true, stdio: "ignore", env: { ...process.env, TELEMULTI_CHILD: "1" } });
+	const child = spawn(command, args, { cwd: key, detached: true, stdio: ["pipe", "ignore", "ignore"], env: { ...process.env, TELEMULTI_CHILD: "1" } });
 	child.unref();
-	spawned.set(key, { pid: child.pid, args, startedAt: Date.now() });
+	spawned.set(key, { pid: child.pid, args, stdin: child.stdin, startedAt: Date.now() });
 	child.on("exit", () => {
 		spawned.delete(key);
 	});

@@ -46,7 +46,7 @@ const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 2_500;
 const MAX_ATTACHMENTS_PER_TURN = 10;
-const SERVER_PROTOCOL_VERSION = 8;
+const SERVER_PROTOCOL_VERSION = 9;
 
 export default function (pi: ExtensionAPI) {
 	let config: TeleMultiConfig = {};
