@@ -1,0 +1,29 @@
+{
+  "name": "pi-telegram-multiplexer",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Pi package extension for controlling multiple pi workspaces from one Telegram bot.",
+  "type": "module",
+  "keywords": ["pi-package", "pi", "telegram", "bot", "extension", "multiplexer"],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  }
+}
