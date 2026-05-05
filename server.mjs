@@ -17,7 +17,7 @@ const HEARTBEAT_MS = 15_000;
 const STALE_MS = 45_000;
 const TYPING_INTERVAL_MS = 4_000;
 const TYPING_MAX_MS = 10 * 60_000;
-const SERVER_PROTOCOL_VERSION = 9;
+const SERVER_PROTOCOL_VERSION = 10;
 
 const token = process.env.TELEMULTI_SERVER_TOKEN || randomBytes(24).toString("hex");
 const packageRoot = dirname(new URL(import.meta.url).pathname);
@@ -120,6 +120,7 @@ async function setBotCommands() {
 			{ command: "workspaces", description: "Pick an active pi workspace to connect" },
 			{ command: "connect", description: "Connect to a workspace path" },
 			{ command: "confirm", description: "Confirm creating a missing workspace" },
+			{ command: "kill", description: "Stop the pi instance for this chat's workspace" },
 			{ command: "help", description: "Show usage help" },
 		],
 	}).catch((error) => console.error("setMyCommands", error));
@@ -257,6 +258,23 @@ async function messageFiles(message) {
 	}
 	return out;
 }
+async function killWorkspaceInstance(chatId) {
+	const workspacePath = state.chatWorkspaces[String(chatId)];
+	if (!workspacePath) return sendTelegramText(chatId, "No workspace connected. Use /workspaces or /connect <workspace-path> first.");
+	if (clients.size <= 1) return sendTelegramText(chatId, "Cannot kill this workspace instance because it is the last connected pi instance.");
+	const key = workspaceKey(workspacePath);
+	const ownerId = workspaces.get(key);
+	const owner = ownerId ? clients.get(ownerId) : undefined;
+	if (!owner) return sendTelegramText(chatId, `Workspace is not active: ${key}`);
+	try {
+		if (owner.pid && owner.pid !== process.pid) process.kill(owner.pid, "SIGTERM");
+	} catch {
+		// The websocket close/terminate below still removes it from the active workspace set.
+	}
+	owner.ws.close(1000, "Killed via Telegram /kill");
+	setTimeout(() => owner.ws.terminate(), 1_000).unref?.();
+	return sendTelegramText(chatId, `Killed pi instance for ${key}.`);
+}
 async function forwardToWorkspace(message) {
 	const workspacePath = state.chatWorkspaces[String(message.chat.id)];
 	if (!workspacePath) return sendTelegramText(message.chat.id, "No workspace connected. Use /workspaces then /connect <workspace-path>.");
@@ -281,8 +299,9 @@ async function handleTelegramMessage(message) {
 		upsertPending(user, message.chat.id); await saveState(); return sendTelegramText(message.chat.id, "pending approval");
 	}
 	if (!isApproved(user.id)) { upsertPending(user, message.chat.id); await saveState(); return sendTelegramText(message.chat.id, "pending approval"); }
-	if (commandMatches(text, "help")) return sendTelegramText(message.chat.id, "Commands:\n/workspaces — show active workspaces with connect buttons\n/connect <path> — connect this chat to a workspace\n/confirm <id> — confirm creating a missing workspace\n\nGroup note: if commands work but normal group messages do not, disable privacy mode in @BotFather with /setprivacy, or mention/reply to the bot.");
+	if (commandMatches(text, "help")) return sendTelegramText(message.chat.id, "Commands:\n/workspaces — show active workspaces with connect buttons\n/connect <path> — connect this chat to a workspace\n/confirm <id> — confirm creating a missing workspace\n/kill — stop the pi instance for this chat's workspace, unless it is the last connected instance\n\nGroup note: if commands work but normal group messages do not, disable privacy mode in @BotFather with /setprivacy, or mention/reply to the bot.");
 	if (commandMatches(text, "workspaces")) return sendWorkspaces(message.chat.id);
+	if (commandMatches(text, "kill")) return killWorkspaceInstance(message.chat.id);
 	if (text.startsWith("/connect")) return connectChat(message.chat.id, commandArgs(text, "connect") || ".");
 	if (text.startsWith("/confirm")) return confirmCreateWorkspace(message.chat.id, commandArgs(text, "confirm"));
 	await forwardToWorkspace(message);
@@ -339,7 +358,7 @@ async function main() {
 	wss.on("connection", (ws, req) => {
 		const url = new URL(req.url || "/", "http://localhost");
 		if (url.searchParams.get("token") !== token) { ws.close(1008, "bad token"); return; }
-		const id = randomBytes(8).toString("hex"); const client = { id, ws, workspace: undefined, lastPong: Date.now() }; clients.set(id, client);
+		const id = randomBytes(8).toString("hex"); const client = { id, ws, workspace: undefined, pid: undefined, lastPong: Date.now() }; clients.set(id, client);
 		ws.on("pong", () => { client.lastPong = Date.now(); });
 		ws.on("message", async (raw) => {
 			let msg; try { msg = JSON.parse(String(raw)); } catch { return; }
@@ -348,6 +367,7 @@ async function main() {
 				config = await readJson(CONFIG_PATH, config);
 				if (config.botToken && config.botToken !== previousToken) await setBotCommands();
 				client.workspace = workspaceKey(msg.workspace);
+				client.pid = typeof msg.pid === "number" ? msg.pid : undefined;
 				workspaces.set(client.workspace, id);
 				spawned.delete(client.workspace);
 				send(ws, { type: "hello", ok: true, serverVersion: SERVER_PROTOCOL_VERSION, workspacesRoot: config.workspacesRoot });

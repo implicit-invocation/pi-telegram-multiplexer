@@ -46,7 +46,7 @@ const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 2_500;
 const MAX_ATTACHMENTS_PER_TURN = 10;
-const SERVER_PROTOCOL_VERSION = 9;
+const SERVER_PROTOCOL_VERSION = 10;
 
 export default function (pi: ExtensionAPI) {
 	let config: TeleMultiConfig = {};
@@ -222,7 +222,7 @@ export default function (pi: ExtensionAPI) {
 					connected = true;
 					reconnectDelay = RECONNECT_MIN_MS;
 					updateStatus(ctx);
-					send({ type: "hello", workspace: ctx.cwd, session: ctx.sessionManager.getSessionFile() });
+					send({ type: "hello", workspace: ctx.cwd, pid: process.pid, session: ctx.sessionManager.getSessionFile() });
 					resolve();
 				};
 				socket.onerror = () => {
