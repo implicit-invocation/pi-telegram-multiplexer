@@ -41,9 +41,9 @@ The extension reconnects with backoff if the websocket closes, and starts a fres
 /telemulti-setup       Run setup wizard again
 /telemulti-status      Show status
 /telemulti-disconnect  Disconnect this instance from the server
-/telemulti-pending     List pending Telegram users
-/telemulti-approve ID  Approve a Telegram user id
-/telemulti-reject ID   Reject a Telegram user id
+/telemulti-pending     Open a TUI picker to approve/reject pending Telegram users
+/telemulti-approve ID  Approve a Telegram user id directly
+/telemulti-reject ID   Reject a Telegram user id directly
 ```
 
 ## Telegram usage

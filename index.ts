@@ -27,6 +27,14 @@ interface PendingTurn {
 	queuedAttachments: string[];
 }
 
+interface PendingTelegramUser {
+	id: number;
+	username?: string;
+	first_name?: string;
+	last_name?: string;
+	requestedAt?: number;
+}
+
 const SYSTEM_PROMPT_SUFFIX = `
 
 Telegram multiplexer extension is active.
@@ -52,6 +60,7 @@ export default function (pi: ExtensionAPI) {
 	let queuedTurns: PendingTurn[] = [];
 	let currentAbort: (() => void) | undefined;
 	let assistantBuffer = "";
+	const pendingListResolvers = new Map<string, (users: PendingTelegramUser[]) => void>();
 
 	function packageRoot(): string {
 		return dirname(fileURLToPath(import.meta.url));
@@ -71,6 +80,29 @@ export default function (pi: ExtensionAPI) {
 	function send(message: ServerMessage): void {
 		if (!ws || ws.readyState !== WebSocket.OPEN) return;
 		ws.send(JSON.stringify(message));
+	}
+
+	function userLabel(user: PendingTelegramUser): string {
+		const handle = user.username ? `@${user.username}` : [user.first_name, user.last_name].filter(Boolean).join(" ");
+		return `${user.id}${handle ? ` — ${handle}` : ""}`;
+	}
+
+	async function requestPendingUsers(ctx: ExtensionContext): Promise<PendingTelegramUser[]> {
+		if (!connected) await ensureServerAndConnect(ctx);
+		if (!connected) throw new Error("Telegram multiplexer server is not connected");
+		const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const users = await new Promise<PendingTelegramUser[]>((resolve, reject) => {
+			const timer = setTimeout(() => {
+				pendingListResolvers.delete(requestId);
+				reject(new Error("Timed out waiting for pending Telegram users"));
+			}, 3_000);
+			pendingListResolvers.set(requestId, (value) => {
+				clearTimeout(timer);
+				resolve(value);
+			});
+			send({ type: "pending-list", requestId });
+		});
+		return users;
 	}
 
 	async function validateToken(token: string): Promise<TeleMultiConfig | undefined> {
@@ -244,8 +276,15 @@ export default function (pi: ExtensionAPI) {
 			await dispatchNext(ctx);
 		}
 		if (msg.type === "pending-list") {
-			const users = (msg.pendingUsers as Array<{ id: number; username?: string; first_name?: string }> | undefined) ?? [];
-			ctx.ui.notify(users.length ? users.map((u) => `${u.id} ${u.username ? `@${u.username}` : u.first_name || ""}`).join(" | ") : "No pending Telegram users", "info");
+			const users = (msg.pendingUsers as PendingTelegramUser[] | undefined) ?? [];
+			const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+			if (requestId && pendingListResolvers.has(requestId)) {
+				const resolve = pendingListResolvers.get(requestId);
+				pendingListResolvers.delete(requestId);
+				resolve?.(users);
+				return;
+			}
+			ctx.ui.notify(users.length ? users.map(userLabel).join(" | ") : "No pending Telegram users", "info");
 		}
 		if (msg.type === "notice") ctx.ui.notify(String(msg.text || ""), "info");
 	}
@@ -271,7 +310,27 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("telemulti-setup", { description: "Run Telegram multiplexer setup wizard", handler: async (_args, ctx) => { config = await readConfig(); await runSetupWizard(ctx); } });
 	pi.registerCommand("telemulti-status", { description: "Show Telegram multiplexer status", handler: async (_args, ctx) => ctx.ui.notify(`config: ${CONFIG_PATH} | server: ${connected ? "connected" : "disconnected"} | workspace: ${ctx.cwd}`, "info") });
 	pi.registerCommand("telemulti-disconnect", { description: "Disconnect this pi instance from the Telegram multiplexer server", handler: async (_args, ctx) => { ws?.close(); ws = undefined; connected = false; updateStatus(ctx); } });
-	pi.registerCommand("telemulti-pending", { description: "List pending Telegram accounts awaiting approval", handler: async () => send({ type: "pending-list" }) });
+	pi.registerCommand("telemulti-pending", {
+		description: "Review pending Telegram accounts in the TUI and approve or reject one",
+		handler: async (_args, ctx) => {
+			try {
+				const users = await requestPendingUsers(ctx);
+				if (users.length === 0) {
+					ctx.ui.notify("No pending Telegram users", "info");
+					return;
+				}
+				const selected = await ctx.ui.select("Pending Telegram users", users.map(userLabel));
+				if (!selected) return;
+				const user = users.find((candidate) => userLabel(candidate) === selected);
+				if (!user) return;
+				const action = await ctx.ui.select(`Handle ${userLabel(user)}`, ["approve", "reject", "cancel"]);
+				if (action === "approve") send({ type: "approve", userId: user.id });
+				if (action === "reject") send({ type: "reject", userId: user.id });
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			}
+		},
+	});
 	pi.registerCommand("telemulti-approve", { description: "Approve a pending Telegram user id", handler: async (args, ctx) => { const id = args.trim(); if (!id) return ctx.ui.notify("Usage: /telemulti-approve <telegram-user-id>", "error"); send({ type: "approve", userId: id }); } });
 	pi.registerCommand("telemulti-reject", { description: "Reject a pending Telegram user id", handler: async (args, ctx) => { const id = args.trim(); if (!id) return ctx.ui.notify("Usage: /telemulti-reject <telegram-user-id>", "error"); send({ type: "reject", userId: id }); } });
 

@@ -202,7 +202,7 @@ async function main() {
 			let msg; try { msg = JSON.parse(String(raw)); } catch { return; }
 			if (msg.type === "hello") { client.workspace = workspaceKey(msg.workspace); workspaces.set(client.workspace, id); spawned.delete(client.workspace); send(ws, { type: "hello", ok: true, workspacesRoot: config.workspacesRoot }); broadcastServerStatus(); }
 			if (msg.type === "assistant") await broadcastWorkspace(client.workspace, msg.text || "", msg.files || []);
-			if (msg.type === "pending-list") send(ws, { type: "pending-list", pendingUsers: state.pendingUsers });
+			if (msg.type === "pending-list") send(ws, { type: "pending-list", requestId: msg.requestId, pendingUsers: state.pendingUsers });
 			if (msg.type === "approve") { const idNum = Number(msg.userId); if (!state.approvedUsers.includes(idNum)) state.approvedUsers.push(idNum); state.pendingUsers = state.pendingUsers.filter((u) => u.id !== idNum); await saveState(); send(ws, { type: "notice", text: `Approved ${idNum}` }); }
 			if (msg.type === "reject") { const idNum = Number(msg.userId); state.pendingUsers = state.pendingUsers.filter((u) => u.id !== idNum); await saveState(); send(ws, { type: "notice", text: `Rejected ${idNum}` }); }
 		});
