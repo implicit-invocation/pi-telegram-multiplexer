@@ -15,6 +15,7 @@ const STATE_PATH = join(PI_AGENT_DIR, "telemulti-state.json");
 const MAX_MESSAGE_LENGTH = 4096;
 const HEARTBEAT_MS = 15_000;
 const STALE_MS = 45_000;
+const SERVER_PROTOCOL_VERSION = 2;
 
 const token = process.env.TELEMULTI_SERVER_TOKEN || randomBytes(24).toString("hex");
 const packageRoot = dirname(new URL(import.meta.url).pathname);
@@ -298,7 +299,7 @@ async function main() {
 				client.workspace = workspaceKey(msg.workspace);
 				workspaces.set(client.workspace, id);
 				spawned.delete(client.workspace);
-				send(ws, { type: "hello", ok: true, workspacesRoot: config.workspacesRoot });
+				send(ws, { type: "hello", ok: true, serverVersion: SERVER_PROTOCOL_VERSION, workspacesRoot: config.workspacesRoot });
 				broadcastServerStatus();
 			}
 			if (msg.type === "assistant") await broadcastWorkspace(client.workspace, msg.text || "", msg.files || []);

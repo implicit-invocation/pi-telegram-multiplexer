@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -46,6 +46,7 @@ const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 2_500;
 const MAX_ATTACHMENTS_PER_TURN = 10;
+const SERVER_PROTOCOL_VERSION = 2;
 
 export default function (pi: ExtensionAPI) {
 	let config: TeleMultiConfig = {};
@@ -179,11 +180,24 @@ export default function (pi: ExtensionAPI) {
 		throw new Error("Timed out starting telemulti local server");
 	}
 
+	async function killServerPointer(): Promise<void> {
+		const pointer = await readJson<ServerPointer | undefined>(SERVER_PATH, undefined);
+		if (pointer?.pid && pointer.pid !== process.pid) {
+			try {
+				process.kill(pointer.pid, "SIGTERM");
+			} catch {
+				// already gone or not owned by us
+			}
+		}
+		await rm(SERVER_PATH, { force: true }).catch(() => undefined);
+	}
+
 	async function getServerPointer(forceRestart = false): Promise<ServerPointer> {
 		if (!forceRestart) {
 			const pointer = await readJson<ServerPointer | undefined>(SERVER_PATH, undefined);
 			if (pointer && (await pointerAlive(pointer))) return pointer;
 		}
+		if (forceRestart) await killServerPointer();
 		return startServer();
 	}
 
@@ -277,6 +291,17 @@ export default function (pi: ExtensionAPI) {
 	async function handleServerMessage(raw: string, ctx: ExtensionContext): Promise<void> {
 		let msg: ServerMessage;
 		try { msg = JSON.parse(raw) as ServerMessage; } catch { return; }
+		if (msg.type === "hello") {
+			if (msg.serverVersion !== SERVER_PROTOCOL_VERSION) {
+				ctx.ui.notify("Old Telegram multiplexer server detected; restarting local server...", "info");
+				ws?.close();
+				ws = undefined;
+				connected = false;
+				await killServerPointer();
+				await ensureServerAndConnect(ctx, true).catch((error) => updateStatus(ctx, error instanceof Error ? error.message : String(error)));
+			}
+			return;
+		}
 		if (msg.type === "prompt") {
 			queuedTurns.push({ chatId: Number(msg.chatId), text: String(msg.text || ""), files: (msg.files as IncomingFile[]) || [], queuedAttachments: [] });
 			await dispatchNext(ctx);
@@ -322,6 +347,7 @@ export default function (pi: ExtensionAPI) {
 			const ok = await ctx.ui.confirm("Reset Telegram multiplexer?", "This clears the bot token, setup state, approvals, and chat/workspace connections.");
 			if (!ok) return;
 			send({ type: "reset" });
+			await killServerPointer();
 			config = {};
 			await writeConfig(config);
 			queuedTurns = [];
