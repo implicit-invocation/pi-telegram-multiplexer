@@ -15,7 +15,7 @@ const STATE_PATH = join(PI_AGENT_DIR, "telemulti-state.json");
 const MAX_MESSAGE_LENGTH = 4096;
 const HEARTBEAT_MS = 15_000;
 const STALE_MS = 45_000;
-const SERVER_PROTOCOL_VERSION = 2;
+const SERVER_PROTOCOL_VERSION = 3;
 
 const token = process.env.TELEMULTI_SERVER_TOKEN || randomBytes(24).toString("hex");
 const packageRoot = dirname(new URL(import.meta.url).pathname);
@@ -175,7 +175,8 @@ async function connectChat(chatId, requestedPath) {
 		if (!st.isDirectory()) return sendTelegramText(chatId, `Not a directory: ${path}`);
 		state.chatWorkspaces[String(chatId)] = path; await saveState();
 		if (!workspaces.has(workspaceKey(path))) spawnPi(path);
-		await sendTelegramText(chatId, `Connected this chat to ${path}${workspaces.has(workspaceKey(path)) ? "" : " (starting pi...)"}`);
+		const groupHint = chatId < 0 ? "\n\nGroup note: Telegram bots only receive normal group messages when BotFather privacy mode is disabled, or when the bot is mentioned/replied to. If commands work but normal messages do not, open @BotFather → /setprivacy → choose this bot → Disable." : "";
+		await sendTelegramText(chatId, `Connected this chat to ${path}${workspaces.has(workspaceKey(path)) ? "" : " (starting pi...)"}${groupHint}`);
 		broadcastServerStatus();
 	} catch {
 		const id = randomBytes(4).toString("hex");
@@ -214,13 +215,15 @@ async function forwardToWorkspace(message) {
 	const workspacePath = state.chatWorkspaces[String(message.chat.id)];
 	if (!workspacePath) return sendTelegramText(message.chat.id, "No workspace connected. Use /workspaces then /connect <workspace-path>.");
 	const key = workspaceKey(workspacePath);
-	if (!workspaces.has(key)) { spawnPi(key); return sendTelegramText(message.chat.id, `Workspace is not active yet; starting pi in ${key}. Please retry in a few seconds.`); }
+	const ownerId = workspaces.get(key);
+	const owner = ownerId ? clients.get(ownerId) : undefined;
+	if (!owner) { spawnPi(key); return sendTelegramText(message.chat.id, `Workspace is not active yet; starting pi in ${key}. Please retry in a few seconds.`); }
 	const files = await messageFiles(message);
 	let text = `[telegram] chat ${message.chat.id}`;
 	const raw = (message.text || message.caption || "").trim();
 	if (raw) text += `\n${raw}`;
 	if (files.length) text += `\n\nTelegram attachments saved locally:\n${files.map((f) => `- ${f.path}`).join("\n")}`;
-	for (const client of clients.values()) if (client.workspace === key) send(client.ws, { type: "prompt", chatId: message.chat.id, text, files });
+	send(owner.ws, { type: "prompt", chatId: message.chat.id, text, files });
 }
 async function handleTelegramMessage(message) {
 	if (!message.from || message.from.is_bot) return;
@@ -231,7 +234,7 @@ async function handleTelegramMessage(message) {
 		upsertPending(user, message.chat.id); await saveState(); return sendTelegramText(message.chat.id, "pending approval");
 	}
 	if (!isApproved(user.id)) { upsertPending(user, message.chat.id); await saveState(); return sendTelegramText(message.chat.id, "pending approval"); }
-	if (commandMatches(text, "help")) return sendTelegramText(message.chat.id, "Commands:\n/workspaces — show active workspaces with connect buttons\n/connect <path> — connect this chat to a workspace\n/confirm <id> — confirm creating a missing workspace");
+	if (commandMatches(text, "help")) return sendTelegramText(message.chat.id, "Commands:\n/workspaces — show active workspaces with connect buttons\n/connect <path> — connect this chat to a workspace\n/confirm <id> — confirm creating a missing workspace\n\nGroup note: if commands work but normal group messages do not, disable privacy mode in @BotFather with /setprivacy, or mention/reply to the bot.");
 	if (commandMatches(text, "workspaces")) return sendWorkspaces(message.chat.id);
 	if (text.startsWith("/connect")) return connectChat(message.chat.id, commandArgs(text, "connect") || ".");
 	if (text.startsWith("/confirm")) {

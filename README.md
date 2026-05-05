@@ -63,6 +63,8 @@ The extension reconnects with backoff if the websocket closes, and starts a fres
 
 Once a chat is connected to a workspace, text and attachments sent to that chat are forwarded to the pi instance in that workspace. Pi replies and files queued with `telemulti_attach` are broadcast to all Telegram chats connected to the same workspace.
 
+For groups: Telegram bot privacy mode must be disabled in [@BotFather](https://t.me/BotFather) for the bot to receive ordinary group messages. If group commands work but normal group messages do not, run `/setprivacy` in BotFather, select the bot, and choose **Disable**. Alternatively, mention or reply to the bot when sending group messages.
+
 ## Notes
 
 - Spawning uses the `pi` command by default. Override with `TELEMULTI_PI_COMMAND=/path/to/pi` if needed.
