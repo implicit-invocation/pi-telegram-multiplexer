@@ -41,6 +41,7 @@ The extension reconnects with backoff if the websocket closes, and starts a fres
 /telemulti-setup       Run setup wizard again
 /telemulti-status      Show status
 /telemulti-disconnect  Disconnect this instance from the server
+/telemulti-reset       Clear settings, approvals, and chat/workspace connections
 /telemulti-pending     Open a TUI picker to approve/reject pending Telegram users
 /telemulti-approve ID  Approve a Telegram user id directly
 /telemulti-reject ID   Reject a Telegram user id directly
@@ -55,6 +56,8 @@ The extension reconnects with backoff if the websocket closes, and starts a fres
 /workspaces
 /connect <workspace-path>
 ```
+
+`/workspaces` shows active workspaces with inline **Connect** buttons. Tapping a button connects the current chat to that workspace.
 
 `/connect` accepts an active absolute workspace, a path relative to the configured workspaces root, or a new path. If the folder does not exist, the bot asks you to confirm with `/confirm <id>` before creating it and starting pi.
 

@@ -21,8 +21,10 @@ const packageRoot = dirname(new URL(import.meta.url).pathname);
 const clients = new Map();
 const workspaces = new Map();
 const spawned = new Map();
+const workspaceButtonTokens = new Map();
 let config = {};
-let state = { approvedUsers: [], pendingUsers: [], chatWorkspaces: {}, createConfirmations: {}, lastUpdateId: undefined };
+function defaultState() { return { approvedUsers: [], pendingUsers: [], chatWorkspaces: {}, createConfirmations: {}, lastUpdateId: undefined }; }
+let state = defaultState();
 let serverPointer;
 let telegramAbort = new AbortController();
 let lastTelegramOkAt = Date.now();
@@ -35,10 +37,10 @@ async function readJson(path, fallback) { try { return JSON.parse(await readFile
 async function writeJson(path, value) { await ensureDirs(); await writeFile(path, JSON.stringify(value, null, "\t") + "\n", "utf8"); }
 function saveState() { return writeJson(STATE_PATH, state); }
 function isApproved(userId) { return state.approvedUsers.includes(userId); }
-function upsertPending(user) {
+function upsertPending(user, chatId) {
 	if (isApproved(user.id)) return;
 	const pending = state.pendingUsers.filter((u) => u.id !== user.id);
-	pending.push({ id: user.id, username: user.username, first_name: user.first_name, last_name: user.last_name, requestedAt: Date.now() });
+	pending.push({ id: user.id, chatId, username: user.username, first_name: user.first_name, last_name: user.last_name, requestedAt: Date.now() });
 	state.pendingUsers = pending;
 }
 function chunkText(text) {
@@ -56,8 +58,21 @@ function safeWorkspacePath(input) {
 function workspaceKey(path) { return resolve(path); }
 function publicWorkspaceList() { return [...workspaces.keys()].sort(); }
 function send(ws, msg) { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); }
+function commandMatches(text, command) {
+	return text === `/${command}` || text.startsWith(`/${command} `) || text.startsWith(`/${command}@`);
+}
+function commandArgs(text, command) {
+	return text.replace(new RegExp(`^/${command}(?:@\\w+)?\\s*`), "").trim();
+}
 function broadcastServerStatus() {
 	for (const client of clients.values()) send(client.ws, { type: "status", workspaces: publicWorkspaceList(), chats: state.chatWorkspaces });
+}
+async function resetAllState() {
+	state = defaultState();
+	config = {};
+	await writeJson(STATE_PATH, state);
+	await writeJson(CONFIG_PATH, config);
+	broadcastServerStatus();
 }
 async function callTelegram(method, body, signal = telegramAbort.signal) {
 	if (!config.botToken) throw new Error("Telegram token missing");
@@ -81,8 +96,23 @@ async function callTelegramMultipart(method, fields, fileField, filePath, fileNa
 	lastTelegramOkAt = Date.now();
 	return data.result;
 }
-async function sendTelegramText(chatId, text) {
-	for (const chunk of chunkText(text)) await callTelegram("sendMessage", { chat_id: chatId, text: chunk || " " }).catch(console.error);
+async function sendTelegramText(chatId, text, extra = {}) {
+	const chunks = chunkText(text);
+	for (let i = 0; i < chunks.length; i++) {
+		const body = { chat_id: chatId, text: chunks[i] || " ", ...(i === chunks.length - 1 ? extra : {}) };
+		await callTelegram("sendMessage", body).catch(console.error);
+	}
+}
+async function setBotCommands() {
+	await callTelegram("setMyCommands", {
+		commands: [
+			{ command: "start", description: "Request access / show getting started help" },
+			{ command: "workspaces", description: "Pick an active pi workspace to connect" },
+			{ command: "connect", description: "Connect to a workspace path" },
+			{ command: "confirm", description: "Confirm creating a missing workspace" },
+			{ command: "help", description: "Show usage help" },
+		],
+	}).catch((error) => console.error("setMyCommands", error));
 }
 async function sendTelegramFile(chatId, path) {
 	const lower = path.toLowerCase();
@@ -107,6 +137,30 @@ function spawnPi(workspacePath) {
 	child.unref();
 	spawned.set(key, { pid: child.pid, stdin: child.stdin, startedAt: Date.now() });
 	setTimeout(() => spawned.delete(key), 30_000).unref();
+}
+function workspaceDisplayName(path) {
+	const root = resolve(config.workspacesRoot || process.cwd());
+	const rel = relative(root, path);
+	if (rel && !rel.startsWith("..") && !isAbsolute(rel)) return rel;
+	return path;
+}
+function createWorkspaceButtonToken(path) {
+	const token = randomBytes(6).toString("hex");
+	workspaceButtonTokens.set(token, { path, expiresAt: Date.now() + 10 * 60_000 });
+	return token;
+}
+function pruneWorkspaceButtonTokens() {
+	const now = Date.now();
+	for (const [token, value] of workspaceButtonTokens) if (value.expiresAt < now) workspaceButtonTokens.delete(token);
+}
+async function sendWorkspaces(chatId) {
+	pruneWorkspaceButtonTokens();
+	const list = publicWorkspaceList();
+	if (list.length === 0) {
+		return sendTelegramText(chatId, "No active workspaces yet. Start pi in a workspace, or use /connect <path> to start one.");
+	}
+	const keyboard = list.map((path) => [{ text: `Connect: ${workspaceDisplayName(path)}`, callback_data: `connect:${createWorkspaceButtonToken(path)}` }]);
+	return sendTelegramText(chatId, "Active workspaces — tap one to connect this chat:", { reply_markup: { inline_keyboard: keyboard } });
 }
 async function connectChat(chatId, requestedPath) {
 	const path = safeWorkspacePath(requestedPath || ".");
@@ -166,31 +220,63 @@ async function handleTelegramMessage(message) {
 	if (!message.from || message.from.is_bot) return;
 	const user = message.from;
 	const text = (message.text || "").trim();
-	if (text === "/start") {
-		if (isApproved(user.id)) return sendTelegramText(message.chat.id, "approved. Use /workspaces or /connect <workspace-path>.");
-		upsertPending(user); await saveState(); return sendTelegramText(message.chat.id, "pending approval");
+	if (commandMatches(text, "start")) {
+		if (isApproved(user.id)) return sendTelegramText(message.chat.id, "You're approved. Tap /workspaces to pick an active workspace, or use /connect <path>.");
+		upsertPending(user, message.chat.id); await saveState(); return sendTelegramText(message.chat.id, "pending approval");
 	}
-	if (!isApproved(user.id)) { upsertPending(user); await saveState(); return sendTelegramText(message.chat.id, "pending approval"); }
-	if (text === "/workspaces") return sendTelegramText(message.chat.id, publicWorkspaceList().map((w) => `- ${w}`).join("\n") || "No active workspaces.");
-	if (text.startsWith("/connect")) return connectChat(message.chat.id, text.replace(/^\/connect\s*/, "").trim() || ".");
+	if (!isApproved(user.id)) { upsertPending(user, message.chat.id); await saveState(); return sendTelegramText(message.chat.id, "pending approval"); }
+	if (commandMatches(text, "help")) return sendTelegramText(message.chat.id, "Commands:\n/workspaces — show active workspaces with connect buttons\n/connect <path> — connect this chat to a workspace\n/confirm <id> — confirm creating a missing workspace");
+	if (commandMatches(text, "workspaces")) return sendWorkspaces(message.chat.id);
+	if (text.startsWith("/connect")) return connectChat(message.chat.id, commandArgs(text, "connect") || ".");
 	if (text.startsWith("/confirm")) {
-		const id = text.replace(/^\/confirm\s*/, "").trim(); const item = state.createConfirmations[id];
+		const id = commandArgs(text, "confirm"); const item = state.createConfirmations[id];
 		if (!item || item.chatId !== message.chat.id || item.expiresAt < Date.now()) return sendTelegramText(message.chat.id, "No pending confirmation with that id.");
 		await mkdir(item.path, { recursive: true }); delete state.createConfirmations[id]; state.chatWorkspaces[String(message.chat.id)] = item.path; await saveState(); spawnPi(item.path); broadcastServerStatus(); return sendTelegramText(message.chat.id, `Created and connected to ${item.path}. Starting pi...`);
 	}
 	await forwardToWorkspace(message);
 }
+async function handleTelegramCallbackQuery(callbackQuery) {
+	const user = callbackQuery.from;
+	const chatId = callbackQuery.message?.chat?.id;
+	const data = callbackQuery.data || "";
+	if (!user || user.is_bot || chatId === undefined) return;
+	if (!isApproved(user.id)) {
+		upsertPending(user, chatId);
+		await saveState();
+		await callTelegram("answerCallbackQuery", { callback_query_id: callbackQuery.id, text: "pending approval", show_alert: true }).catch(console.error);
+		return sendTelegramText(chatId, "pending approval");
+	}
+	if (data.startsWith("connect:")) {
+		pruneWorkspaceButtonTokens();
+		const token = data.slice("connect:".length);
+		const target = workspaceButtonTokens.get(token);
+		if (!target) {
+			await callTelegram("answerCallbackQuery", { callback_query_id: callbackQuery.id, text: "That workspace button expired. Send /workspaces again.", show_alert: true }).catch(console.error);
+			return;
+		}
+		workspaceButtonTokens.delete(token);
+		await callTelegram("answerCallbackQuery", { callback_query_id: callbackQuery.id, text: `Connecting to ${workspaceDisplayName(target.path)}...` }).catch(console.error);
+		return connectChat(chatId, target.path);
+	}
+	await callTelegram("answerCallbackQuery", { callback_query_id: callbackQuery.id }).catch(console.error);
+}
 async function telegramLoop() {
 	await callTelegram("deleteWebhook", { drop_pending_updates: false }).catch(() => {});
 	while (!telegramAbort.signal.aborted) {
 		try {
-			const updates = await callTelegram("getUpdates", { offset: state.lastUpdateId === undefined ? undefined : state.lastUpdateId + 1, limit: 20, timeout: 30, allowed_updates: ["message", "edited_message"] });
-			for (const update of updates) { state.lastUpdateId = update.update_id; await saveState(); const msg = update.message || update.edited_message; if (msg) await handleTelegramMessage(msg); }
+			const updates = await callTelegram("getUpdates", { offset: state.lastUpdateId === undefined ? undefined : state.lastUpdateId + 1, limit: 20, timeout: 30, allowed_updates: ["message", "edited_message", "callback_query"] });
+			for (const update of updates) {
+				state.lastUpdateId = update.update_id;
+				await saveState();
+				const msg = update.message || update.edited_message;
+				if (msg) await handleTelegramMessage(msg);
+				if (update.callback_query) await handleTelegramCallbackQuery(update.callback_query);
+			}
 		} catch (e) { if (!telegramAbort.signal.aborted) { console.error("telegram loop", e); await new Promise((r) => setTimeout(r, 3000)); } }
 	}
 }
 async function main() {
-	await ensureDirs(); config = await readJson(CONFIG_PATH, {}); state = { ...state, ...(await readJson(STATE_PATH, {})) };
+	await ensureDirs(); config = await readJson(CONFIG_PATH, {}); state = { ...defaultState(), ...(await readJson(STATE_PATH, {})) };
 	const http = createServer((req, res) => { res.writeHead(200); res.end("pi-telegram-multiplexer\n"); });
 	const wss = new WebSocketServer({ server: http });
 	wss.on("connection", (ws, req) => {
@@ -200,18 +286,46 @@ async function main() {
 		ws.on("pong", () => { client.lastPong = Date.now(); });
 		ws.on("message", async (raw) => {
 			let msg; try { msg = JSON.parse(String(raw)); } catch { return; }
-			if (msg.type === "hello") { client.workspace = workspaceKey(msg.workspace); workspaces.set(client.workspace, id); spawned.delete(client.workspace); send(ws, { type: "hello", ok: true, workspacesRoot: config.workspacesRoot }); broadcastServerStatus(); }
+			if (msg.type === "hello") {
+				const previousToken = config.botToken;
+				config = await readJson(CONFIG_PATH, config);
+				if (config.botToken && config.botToken !== previousToken) await setBotCommands();
+				client.workspace = workspaceKey(msg.workspace);
+				workspaces.set(client.workspace, id);
+				spawned.delete(client.workspace);
+				send(ws, { type: "hello", ok: true, workspacesRoot: config.workspacesRoot });
+				broadcastServerStatus();
+			}
 			if (msg.type === "assistant") await broadcastWorkspace(client.workspace, msg.text || "", msg.files || []);
 			if (msg.type === "pending-list") send(ws, { type: "pending-list", requestId: msg.requestId, pendingUsers: state.pendingUsers });
-			if (msg.type === "approve") { const idNum = Number(msg.userId); if (!state.approvedUsers.includes(idNum)) state.approvedUsers.push(idNum); state.pendingUsers = state.pendingUsers.filter((u) => u.id !== idNum); await saveState(); send(ws, { type: "notice", text: `Approved ${idNum}` }); }
-			if (msg.type === "reject") { const idNum = Number(msg.userId); state.pendingUsers = state.pendingUsers.filter((u) => u.id !== idNum); await saveState(); send(ws, { type: "notice", text: `Rejected ${idNum}` }); }
+			if (msg.type === "reset") {
+				await resetAllState();
+				send(ws, { type: "notice", text: "Telegram multiplexer settings, approvals, and chat connections reset." });
+			}
+			if (msg.type === "approve") {
+				const idNum = Number(msg.userId);
+				const pending = state.pendingUsers.find((u) => u.id === idNum);
+				if (!state.approvedUsers.includes(idNum)) state.approvedUsers.push(idNum);
+				state.pendingUsers = state.pendingUsers.filter((u) => u.id !== idNum);
+				await saveState();
+				await sendTelegramText(pending?.chatId || idNum, "approved. Use /workspaces or /connect <workspace-path>.");
+				send(ws, { type: "notice", text: `Approved ${idNum}` });
+			}
+			if (msg.type === "reject") {
+				const idNum = Number(msg.userId);
+				const pending = state.pendingUsers.find((u) => u.id === idNum);
+				state.pendingUsers = state.pendingUsers.filter((u) => u.id !== idNum);
+				await saveState();
+				await sendTelegramText(pending?.chatId || idNum, "rejected");
+				send(ws, { type: "notice", text: `Rejected ${idNum}` });
+			}
 		});
 		ws.on("close", () => { clients.delete(id); if (client.workspace && workspaces.get(client.workspace) === id) workspaces.delete(client.workspace); broadcastServerStatus(); });
 	});
 	setInterval(() => { for (const c of clients.values()) { if (Date.now() - c.lastPong > STALE_MS) c.ws.terminate(); else c.ws.ping(); } }, HEARTBEAT_MS).unref();
 	setInterval(() => { if (Date.now() - lastTelegramOkAt > 5 * 60_000) { telegramAbort.abort(); telegramAbort = new AbortController(); lastTelegramOkAt = Date.now(); telegramLoop().catch(console.error); } }, 60_000).unref();
 	http.listen(0, "127.0.0.1", async () => {
-		const port = http.address().port; serverPointer = { url: `ws://127.0.0.1:${port}`, port, pid: process.pid, token, updatedAt: Date.now() }; await writeJson(SERVER_PATH, serverPointer); console.error(`telemulti server ${serverPointer.url}`); telegramLoop().catch(console.error);
+		const port = http.address().port; serverPointer = { url: `ws://127.0.0.1:${port}`, port, pid: process.pid, token, updatedAt: Date.now() }; await writeJson(SERVER_PATH, serverPointer); console.error(`telemulti server ${serverPointer.url}`); await setBotCommands(); telegramLoop().catch(console.error);
 	});
 	async function shutdown() { telegramAbort.abort(); await rm(SERVER_PATH, { force: true }).catch(() => {}); process.exit(0); }
 	process.on("SIGTERM", shutdown); process.on("SIGINT", shutdown);

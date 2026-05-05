@@ -51,6 +51,7 @@ If you skip setup, run it later inside pi:
 /telemulti-approve ID   Approve a Telegram user directly
 /telemulti-reject ID    Reject a Telegram user directly
 /telemulti-disconnect   Disconnect this pi instance from the local server
+/telemulti-reset        Clear settings, approvals, and chat/workspace connections
 ```
 
 ## Telegram test flow
@@ -64,6 +65,11 @@ If you skip setup, run it later inside pi:
 
 ```text
 /workspaces
+```
+
+Tap a workspace's **Connect** button, or manually run:
+
+```text
 /connect <workspace-path>
 ```
 

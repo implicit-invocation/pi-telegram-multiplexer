@@ -125,8 +125,12 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			ctx.ui.setStatus("telemulti", `${ctx.ui.theme.fg("accent", "telemulti")} ${ctx.ui.theme.fg("warning", "validating Telegram token...")}`);
+			ctx.ui.setWidget("telemulti-setup", ["⏳ Validating Telegram bot token..."]);
 			const next = await validateToken(token);
 			if (!next) return;
+			ctx.ui.setStatus("telemulti", `${ctx.ui.theme.fg("accent", "telemulti")} ${ctx.ui.theme.fg("warning", "waiting for workspace folder selection")}`);
+			ctx.ui.setWidget("telemulti-setup", ["✅ Telegram token validated.", "Choose the workspaces folder to finish setup."]);
 			const choice = await ctx.ui.select("Workspaces folder", ["current folder", "parent folder", "type"]);
 			let root = ctx.cwd;
 			if (choice === "parent folder") root = dirname(ctx.cwd);
@@ -142,6 +146,8 @@ export default function (pi: ExtensionAPI) {
 			ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 		} finally {
 			setupInProgress = false;
+			ctx.ui.setWidget("telemulti-setup", []);
+			updateStatus(ctx);
 		}
 	}
 
@@ -310,6 +316,23 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("telemulti-setup", { description: "Run Telegram multiplexer setup wizard", handler: async (_args, ctx) => { config = await readConfig(); await runSetupWizard(ctx); } });
 	pi.registerCommand("telemulti-status", { description: "Show Telegram multiplexer status", handler: async (_args, ctx) => ctx.ui.notify(`config: ${CONFIG_PATH} | server: ${connected ? "connected" : "disconnected"} | workspace: ${ctx.cwd}`, "info") });
 	pi.registerCommand("telemulti-disconnect", { description: "Disconnect this pi instance from the Telegram multiplexer server", handler: async (_args, ctx) => { ws?.close(); ws = undefined; connected = false; updateStatus(ctx); } });
+	pi.registerCommand("telemulti-reset", {
+		description: "Clear Telegram multiplexer settings, approvals, and chat connections",
+		handler: async (_args, ctx) => {
+			const ok = await ctx.ui.confirm("Reset Telegram multiplexer?", "This clears the bot token, setup state, approvals, and chat/workspace connections.");
+			if (!ok) return;
+			send({ type: "reset" });
+			config = {};
+			await writeConfig(config);
+			queuedTurns = [];
+			activeTurn = undefined;
+			ws?.close();
+			ws = undefined;
+			connected = false;
+			updateStatus(ctx);
+			ctx.ui.notify("Telegram multiplexer local settings reset. Run /telemulti-setup to configure again.", "info");
+		},
+	});
 	pi.registerCommand("telemulti-pending", {
 		description: "Review pending Telegram accounts in the TUI and approve or reject one",
 		handler: async (_args, ctx) => {
