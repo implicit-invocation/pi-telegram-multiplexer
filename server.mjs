@@ -74,6 +74,11 @@ async function resetAllState() {
 	await writeJson(CONFIG_PATH, config);
 	broadcastServerStatus();
 }
+async function exitAfterReset() {
+	telegramAbort.abort();
+	await rm(SERVER_PATH, { force: true }).catch(() => {});
+	setTimeout(() => process.exit(0), 100).unref();
+}
 async function callTelegram(method, body, signal = telegramAbort.signal) {
 	if (!config.botToken) throw new Error("Telegram token missing");
 	const response = await fetch(`https://api.telegram.org/bot${config.botToken}/${method}`, {
@@ -300,7 +305,8 @@ async function main() {
 			if (msg.type === "pending-list") send(ws, { type: "pending-list", requestId: msg.requestId, pendingUsers: state.pendingUsers });
 			if (msg.type === "reset") {
 				await resetAllState();
-				send(ws, { type: "notice", text: "Telegram multiplexer settings, approvals, and chat connections reset." });
+				send(ws, { type: "notice", text: "Telegram multiplexer settings, approvals, and chat connections reset. Local server is stopping." });
+				await exitAfterReset();
 			}
 			if (msg.type === "approve") {
 				const idNum = Number(msg.userId);
