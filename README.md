@@ -62,7 +62,7 @@ The extension reconnects with backoff if the websocket closes, and starts a fres
 
 `/workspaces` shows active workspaces with inline **Connect** buttons. Tapping a button connects the current chat to that workspace.
 
-`/connect` accepts an active absolute workspace, a path relative to the configured workspaces root, or a new path. If the folder does not exist, the bot asks you to confirm with `/confirm <id>` before creating it and starting pi.
+`/connect` accepts an active absolute workspace, a path relative to the configured workspaces root, or a new path. If the folder does not exist, the bot sends an inline **Create and connect** button, plus a fallback `/confirm <id>` command, before creating it and starting pi.
 
 Once a chat is connected to a workspace, text and attachments sent to that chat are forwarded to the pi instance in that workspace. While pi is working, the bot sends Telegram `typing` chat actions to connected chats. Pi replies and files queued with `telemulti_attach` are broadcast to all Telegram chats connected to the same workspace.
 

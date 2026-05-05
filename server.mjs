@@ -17,7 +17,7 @@ const HEARTBEAT_MS = 15_000;
 const STALE_MS = 45_000;
 const TYPING_INTERVAL_MS = 4_000;
 const TYPING_MAX_MS = 10 * 60_000;
-const SERVER_PROTOCOL_VERSION = 5;
+const SERVER_PROTOCOL_VERSION = 6;
 
 const token = process.env.TELEMULTI_SERVER_TOKEN || randomBytes(24).toString("hex");
 const packageRoot = dirname(new URL(import.meta.url).pathname);
@@ -210,8 +210,21 @@ async function connectChat(chatId, requestedPath) {
 		const id = randomBytes(4).toString("hex");
 		state.createConfirmations[id] = { chatId, path, expiresAt: Date.now() + 10 * 60_000 };
 		await saveState();
-		await sendTelegramText(chatId, `Workspace does not exist: ${path}\nSend /confirm ${id} to create it and start pi.`);
+		await sendTelegramText(chatId, `Workspace does not exist: ${path}\nTap Confirm to create it and start pi, or send /confirm ${id}.`, {
+			reply_markup: { inline_keyboard: [[{ text: `Create and connect: ${workspaceDisplayName(path)}`, callback_data: `confirm:${id}` }]] },
+		});
 	}
+}
+async function confirmCreateWorkspace(chatId, id) {
+	const item = state.createConfirmations[id];
+	if (!item || item.chatId !== chatId || item.expiresAt < Date.now()) return sendTelegramText(chatId, "No pending confirmation with that id.");
+	await mkdir(item.path, { recursive: true });
+	delete state.createConfirmations[id];
+	state.chatWorkspaces[String(chatId)] = item.path;
+	await saveState();
+	spawnPi(item.path);
+	broadcastServerStatus();
+	return sendTelegramText(chatId, `Created and connected to ${item.path}. Starting pi...`);
 }
 async function downloadTelegramFile(fileId, suggestedName) {
 	const file = await callTelegram("getFile", { file_id: fileId });
@@ -266,11 +279,7 @@ async function handleTelegramMessage(message) {
 	if (commandMatches(text, "help")) return sendTelegramText(message.chat.id, "Commands:\n/workspaces — show active workspaces with connect buttons\n/connect <path> — connect this chat to a workspace\n/confirm <id> — confirm creating a missing workspace\n\nGroup note: if commands work but normal group messages do not, disable privacy mode in @BotFather with /setprivacy, or mention/reply to the bot.");
 	if (commandMatches(text, "workspaces")) return sendWorkspaces(message.chat.id);
 	if (text.startsWith("/connect")) return connectChat(message.chat.id, commandArgs(text, "connect") || ".");
-	if (text.startsWith("/confirm")) {
-		const id = commandArgs(text, "confirm"); const item = state.createConfirmations[id];
-		if (!item || item.chatId !== message.chat.id || item.expiresAt < Date.now()) return sendTelegramText(message.chat.id, "No pending confirmation with that id.");
-		await mkdir(item.path, { recursive: true }); delete state.createConfirmations[id]; state.chatWorkspaces[String(message.chat.id)] = item.path; await saveState(); spawnPi(item.path); broadcastServerStatus(); return sendTelegramText(message.chat.id, `Created and connected to ${item.path}. Starting pi...`);
-	}
+	if (text.startsWith("/confirm")) return confirmCreateWorkspace(message.chat.id, commandArgs(text, "confirm"));
 	await forwardToWorkspace(message);
 }
 async function handleTelegramCallbackQuery(callbackQuery) {
@@ -283,6 +292,11 @@ async function handleTelegramCallbackQuery(callbackQuery) {
 		await saveState();
 		await callTelegram("answerCallbackQuery", { callback_query_id: callbackQuery.id, text: "pending approval", show_alert: true }).catch(console.error);
 		return sendTelegramText(chatId, "pending approval");
+	}
+	if (data.startsWith("confirm:")) {
+		const id = data.slice("confirm:".length);
+		await callTelegram("answerCallbackQuery", { callback_query_id: callbackQuery.id, text: "Creating workspace..." }).catch(console.error);
+		return confirmCreateWorkspace(chatId, id);
 	}
 	if (data.startsWith("connect:")) {
 		pruneWorkspaceButtonTokens();
