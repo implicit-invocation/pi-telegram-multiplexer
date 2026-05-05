@@ -103,9 +103,9 @@ function spawnPi(workspacePath) {
 	const key = workspaceKey(workspacePath);
 	if (workspaces.has(key) || spawned.has(key)) return;
 	const command = process.env.TELEMULTI_PI_COMMAND || "pi";
-	const child = spawn(command, ["-e", packageRoot], { cwd: key, detached: true, stdio: "ignore", env: { ...process.env, TELEMULTI_CHILD: "1" } });
+	const child = spawn(command, ["--mode", "rpc", "-e", packageRoot], { cwd: key, detached: true, stdio: ["pipe", "ignore", "ignore"], env: { ...process.env, TELEMULTI_CHILD: "1" } });
 	child.unref();
-	spawned.set(key, { pid: child.pid, startedAt: Date.now() });
+	spawned.set(key, { pid: child.pid, stdin: child.stdin, startedAt: Date.now() });
 	setTimeout(() => spawned.delete(key), 30_000).unref();
 }
 async function connectChat(chatId, requestedPath) {

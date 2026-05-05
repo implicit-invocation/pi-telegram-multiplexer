@@ -63,5 +63,5 @@ Once a chat is connected to a workspace, text and attachments sent to that chat 
 ## Notes
 
 - Spawning uses the `pi` command by default. Override with `TELEMULTI_PI_COMMAND=/path/to/pi` if needed.
-- Spawned workspaces use `pi -e <this package>`, so the package does not need to be globally installed inside the child process environment as long as the same local package path is accessible.
+- Spawned workspaces use `pi --mode rpc -e <this package>` so they can run headlessly while the extension receives work through the websocket server.
 - Telegram files are downloaded to `~/.pi/agent/tmp/telemulti` and passed to pi as local file paths. Images are also included as image inputs.
