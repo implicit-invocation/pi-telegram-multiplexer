@@ -132,10 +132,13 @@ export default function (pi: ExtensionAPI) {
 			if (!next) return;
 			ctx.ui.setStatus("telemulti", `${ctx.ui.theme.fg("accent", "telemulti")} ${ctx.ui.theme.fg("warning", "waiting for workspace folder selection")}`);
 			ctx.ui.setWidget("telemulti-setup", ["✅ Telegram token validated.", "Choose the workspaces folder to finish setup."]);
-			const choice = await ctx.ui.select("Workspaces folder", ["current folder", "parent folder", "type"]);
-			let root = ctx.cwd;
-			if (choice === "parent folder") root = dirname(ctx.cwd);
-			if (choice === "type") {
+			const currentFolderChoice = `current folder (${ctx.cwd})`;
+			const parentFolderChoice = `parent folder (${dirname(ctx.cwd)})`;
+			const typeChoice = "type";
+			const choice = await ctx.ui.select("Workspaces folder", [parentFolderChoice, currentFolderChoice, typeChoice]);
+			let root = dirname(ctx.cwd);
+			if (choice === currentFolderChoice) root = ctx.cwd;
+			if (choice === typeChoice) {
 				const typed = (await ctx.ui.input("Absolute or relative workspaces folder", config.workspacesRoot || ctx.cwd))?.trim();
 				if (typed) root = typed.startsWith("/") ? typed : join(ctx.cwd, typed);
 			}

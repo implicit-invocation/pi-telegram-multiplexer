@@ -18,7 +18,7 @@ pi install /path/to/pi-telegram-multiplexer
 On the first pi startup after installation, the extension opens a wizard:
 
 1. Paste your Telegram bot token.
-2. Choose the workspaces root: current folder, parent folder, or a typed path.
+2. Choose the workspaces root. The default first option is the parent folder, and the current/parent options show their full paths in parentheses.
 
 If you leave the token empty, setup is marked as skipped and you will not be prompted again. Run this anytime to configure or reconfigure:
 

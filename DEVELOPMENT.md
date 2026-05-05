@@ -35,7 +35,7 @@ pi -e /Users/dev/projects/pi-telegram-multiplexer
 On first run, the setup wizard asks for:
 
 1. Telegram bot token.
-2. Workspaces folder: current folder, parent folder, or a custom path.
+2. Workspaces folder. Parent folder is shown first by default, and current/parent choices include their full paths in parentheses.
 
 If you skip setup, run it later inside pi:
 
