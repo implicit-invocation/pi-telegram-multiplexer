@@ -15,7 +15,9 @@ const STATE_PATH = join(PI_AGENT_DIR, "telemulti-state.json");
 const MAX_MESSAGE_LENGTH = 4096;
 const HEARTBEAT_MS = 15_000;
 const STALE_MS = 45_000;
-const SERVER_PROTOCOL_VERSION = 3;
+const TYPING_INTERVAL_MS = 4_000;
+const TYPING_MAX_MS = 10 * 60_000;
+const SERVER_PROTOCOL_VERSION = 4;
 
 const token = process.env.TELEMULTI_SERVER_TOKEN || randomBytes(24).toString("hex");
 const packageRoot = dirname(new URL(import.meta.url).pathname);
@@ -23,6 +25,7 @@ const clients = new Map();
 const workspaces = new Map();
 const spawned = new Map();
 const workspaceButtonTokens = new Map();
+const typingLoops = new Map();
 let config = {};
 function defaultState() { return { approvedUsers: [], pendingUsers: [], chatWorkspaces: {}, createConfirmations: {}, lastUpdateId: undefined }; }
 let state = defaultState();
@@ -69,6 +72,7 @@ function broadcastServerStatus() {
 	for (const client of clients.values()) send(client.ws, { type: "status", workspaces: publicWorkspaceList(), chats: state.chatWorkspaces });
 }
 async function resetAllState() {
+	for (const key of typingLoops.keys()) stopTypingLoop(key);
 	state = defaultState();
 	config = {};
 	await writeJson(STATE_PATH, state);
@@ -125,11 +129,35 @@ async function sendTelegramFile(chatId, path) {
 	const isPhoto = [".jpg", ".jpeg", ".png", ".webp"].includes(extname(lower));
 	await callTelegramMultipart(isPhoto ? "sendPhoto" : "sendDocument", { chat_id: chatId }, isPhoto ? "photo" : "document", path, basename(path)).catch(async (e) => sendTelegramText(chatId, `Failed to send ${path}: ${e.message}`));
 }
+async function sendTypingForWorkspace(path) {
+	for (const chatId of chatsForWorkspace(path)) {
+		await callTelegram("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
+	}
+}
+function startTypingLoop(path) {
+	const key = workspaceKey(path);
+	stopTypingLoop(key);
+	void sendTypingForWorkspace(key);
+	const interval = setInterval(() => void sendTypingForWorkspace(key), TYPING_INTERVAL_MS);
+	const timeout = setTimeout(() => stopTypingLoop(key), TYPING_MAX_MS);
+	interval.unref?.();
+	timeout.unref?.();
+	typingLoops.set(key, { interval, timeout });
+}
+function stopTypingLoop(path) {
+	const key = workspaceKey(path);
+	const loop = typingLoops.get(key);
+	if (!loop) return;
+	clearInterval(loop.interval);
+	clearTimeout(loop.timeout);
+	typingLoops.delete(key);
+}
 function chatsForWorkspace(path) {
 	const key = workspaceKey(path);
 	return Object.entries(state.chatWorkspaces).filter(([, w]) => workspaceKey(w) === key).map(([chatId]) => Number(chatId));
 }
 async function broadcastWorkspace(path, text, files = []) {
+	stopTypingLoop(path);
 	for (const chatId of chatsForWorkspace(path)) {
 		if (text?.trim()) await sendTelegramText(chatId, text.trim());
 		for (const file of files || []) await sendTelegramFile(chatId, file);
@@ -218,6 +246,7 @@ async function forwardToWorkspace(message) {
 	const ownerId = workspaces.get(key);
 	const owner = ownerId ? clients.get(ownerId) : undefined;
 	if (!owner) { spawnPi(key); return sendTelegramText(message.chat.id, `Workspace is not active yet; starting pi in ${key}. Please retry in a few seconds.`); }
+	startTypingLoop(key);
 	const files = await messageFiles(message);
 	let text = `[telegram] chat ${message.chat.id}`;
 	const raw = (message.text || message.caption || "").trim();

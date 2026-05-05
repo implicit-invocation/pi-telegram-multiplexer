@@ -61,7 +61,7 @@ The extension reconnects with backoff if the websocket closes, and starts a fres
 
 `/connect` accepts an active absolute workspace, a path relative to the configured workspaces root, or a new path. If the folder does not exist, the bot asks you to confirm with `/confirm <id>` before creating it and starting pi.
 
-Once a chat is connected to a workspace, text and attachments sent to that chat are forwarded to the pi instance in that workspace. Pi replies and files queued with `telemulti_attach` are broadcast to all Telegram chats connected to the same workspace.
+Once a chat is connected to a workspace, text and attachments sent to that chat are forwarded to the pi instance in that workspace. While pi is working, the bot sends Telegram `typing` chat actions to connected chats. Pi replies and files queued with `telemulti_attach` are broadcast to all Telegram chats connected to the same workspace.
 
 For groups: Telegram bot privacy mode must be disabled in [@BotFather](https://t.me/BotFather) for the bot to receive ordinary group messages. If group commands work but normal group messages do not, run `/setprivacy` in BotFather, select the bot, and choose **Disable**. Alternatively, mention or reply to the bot when sending group messages.
 
