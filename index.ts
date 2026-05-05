@@ -46,7 +46,7 @@ const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 2_500;
 const MAX_ATTACHMENTS_PER_TURN = 10;
-const SERVER_PROTOCOL_VERSION = 6;
+const SERVER_PROTOCOL_VERSION = 8;
 
 export default function (pi: ExtensionAPI) {
 	let config: TeleMultiConfig = {};
@@ -61,6 +61,7 @@ export default function (pi: ExtensionAPI) {
 	let queuedTurns: PendingTurn[] = [];
 	let currentAbort: (() => void) | undefined;
 	let assistantBuffer = "";
+	let shuttingDown = false;
 	const pendingListResolvers = new Map<string, (users: PendingTelegramUser[]) => void>();
 
 	function packageRoot(): string {
@@ -230,7 +231,8 @@ export default function (pi: ExtensionAPI) {
 				};
 				socket.onclose = () => {
 					connected = false;
-					updateStatus(ctx);
+					if (shuttingDown) return;
+					updateStatus();
 					scheduleReconnect(ctx);
 				};
 				socket.onmessage = (event) => void handleServerMessage(String(event.data), ctx);
@@ -396,6 +398,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		shuttingDown = true;
+		currentCtx = undefined;
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		reconnectTimer = undefined;
 		ws?.close();

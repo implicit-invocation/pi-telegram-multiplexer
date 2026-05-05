@@ -71,5 +71,5 @@ For groups: Telegram bot privacy mode must be disabled in [@BotFather](https://t
 ## Notes
 
 - Spawning uses the `pi` command by default. Override with `TELEMULTI_PI_COMMAND=/path/to/pi` if needed.
-- Spawned workspaces use `pi --mode rpc --no-extensions -e <this package>` so they can run headlessly with exactly one copy of this extension loaded, even when the package is also installed globally.
+- Spawned workspaces run in `pi --mode rpc`. For normal installs, the globally installed package is auto-discovered; for local development checkouts, the server adds `-e <this package>`.
 - Telegram files are downloaded to `~/.pi/agent/tmp/telemulti` and passed to pi as local file paths. Images are also included as image inputs.

@@ -105,7 +105,7 @@ kill <pid>
 When Telegram `/connect` targets a workspace without an active connected pi instance, the server spawns one using:
 
 ```bash
-pi --mode rpc --no-extensions -e /Users/dev/projects/pi-telegram-multiplexer
+pi --mode rpc -e /Users/dev/projects/pi-telegram-multiplexer
 ```
 
 Override the command used for spawning if needed:

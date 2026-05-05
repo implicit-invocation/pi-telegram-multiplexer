@@ -17,7 +17,7 @@ const HEARTBEAT_MS = 15_000;
 const STALE_MS = 45_000;
 const TYPING_INTERVAL_MS = 4_000;
 const TYPING_MAX_MS = 10 * 60_000;
-const SERVER_PROTOCOL_VERSION = 6;
+const SERVER_PROTOCOL_VERSION = 8;
 
 const token = process.env.TELEMULTI_SERVER_TOKEN || randomBytes(24).toString("hex");
 const packageRoot = dirname(new URL(import.meta.url).pathname);
@@ -167,9 +167,14 @@ function spawnPi(workspacePath) {
 	const key = workspaceKey(workspacePath);
 	if (workspaces.has(key) || spawned.has(key)) return;
 	const command = process.env.TELEMULTI_PI_COMMAND || "pi";
-	const child = spawn(command, ["--mode", "rpc", "--no-extensions", "-e", packageRoot], { cwd: key, detached: true, stdio: ["pipe", "ignore", "ignore"], env: { ...process.env, TELEMULTI_CHILD: "1" } });
+	const installedPackage = packageRoot.includes(`${PI_AGENT_DIR}/git/`) || packageRoot.includes(`${PI_AGENT_DIR}/npm/`);
+	const args = installedPackage ? ["--mode", "rpc"] : ["--mode", "rpc", "-e", packageRoot];
+	const child = spawn(command, args, { cwd: key, detached: true, stdio: "ignore", env: { ...process.env, TELEMULTI_CHILD: "1" } });
 	child.unref();
-	spawned.set(key, { pid: child.pid, stdin: child.stdin, startedAt: Date.now() });
+	spawned.set(key, { pid: child.pid, args, startedAt: Date.now() });
+	child.on("exit", () => {
+		spawned.delete(key);
+	});
 	setTimeout(() => spawned.delete(key), 30_000).unref();
 }
 function workspaceDisplayName(path) {
