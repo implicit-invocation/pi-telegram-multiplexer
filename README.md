@@ -2,6 +2,9 @@
 
 A pi package that lets one Telegram bot control multiple pi instances across multiple workspaces.
 
+> [!IMPORTANT]
+> This project was made **100% by [pi](https://pi.dev) + GPT-5.5**. Treat it as AI-generated software: review the code, understand the security implications, and test carefully before using it with real Telegram bots or sensitive workspaces.
+
 ## Install
 
 ```bash
