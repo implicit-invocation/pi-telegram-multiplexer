@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { CONFIG_PATH, SERVER_PATH, TEMP_DIR, ensureDirs, guessMediaType, readConfig, readJson, writeConfig, type ServerPointer, type TeleMultiConfig } from "./shared.ts";
 
@@ -22,6 +22,7 @@ interface IncomingFile {
 
 interface PendingTurn {
 	chatId: number;
+	messageKey?: string;
 	text: string;
 	files: IncomingFile[];
 	queuedAttachments: string[];
@@ -46,7 +47,7 @@ const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 2_500;
 const MAX_ATTACHMENTS_PER_TURN = 10;
-const SERVER_PROTOCOL_VERSION = 10;
+const SERVER_PROTOCOL_VERSION = 12;
 
 export default function (pi: ExtensionAPI) {
 	let config: TeleMultiConfig = {};
@@ -62,6 +63,7 @@ export default function (pi: ExtensionAPI) {
 	let currentAbort: (() => void) | undefined;
 	let assistantBuffer = "";
 	let shuttingDown = false;
+	const seenPromptKeys = new Set<string>();
 	const pendingListResolvers = new Map<string, (users: PendingTelegramUser[]) => void>();
 
 	function packageRoot(): string {
@@ -272,6 +274,18 @@ export default function (pi: ExtensionAPI) {
 		return content.filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("");
 	}
 
+	function errorText(error: unknown): string {
+		return error instanceof Error ? error.message : String(error);
+	}
+
+	function agentEndErrorText(event: unknown): string | undefined {
+		const e = event as { error?: unknown; reason?: unknown; cancelled?: boolean; aborted?: boolean };
+		if (e.error) return `⚠️ pi run failed: ${errorText(e.error)}`;
+		if (e.reason && String(e.reason).toLowerCase() !== "complete") return `⚠️ pi run ended: ${String(e.reason)}`;
+		if (e.cancelled || e.aborted) return "⚠️ pi run was stopped before producing a reply.";
+		return undefined;
+	}
+
 	async function buildContent(turn: PendingTurn): Promise<Array<TextContent | ImageContent>> {
 		const content: Array<TextContent | ImageContent> = [{ type: "text", text: turn.text }];
 		for (const file of turn.files) {
@@ -290,7 +304,92 @@ export default function (pi: ExtensionAPI) {
 		if (!next) return;
 		activeTurn = next;
 		assistantBuffer = "";
-		pi.sendUserMessage(await buildContent(next));
+		try {
+			pi.sendUserMessage(await buildContent(next));
+		} catch (error) {
+			const failed = activeTurn;
+			activeTurn = undefined;
+			if (failed) send({ type: "telegram-text", chatId: failed.chatId, text: `⚠️ Failed to start pi turn: ${errorText(error)}` });
+			await dispatchNext(ctx);
+		}
+	}
+
+	function modelLabel(model: { provider?: string; id?: string; name?: string }): string {
+		const id = `${model.provider ?? "unknown"}/${model.id ?? "unknown"}`;
+		return model.name && model.name !== model.id ? `${id} — ${model.name}` : id;
+	}
+
+	function parseModelSpec(raw: string): { query: string; thinkingLevel?: string } {
+		const trimmed = raw.trim();
+		const levels = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+		const match = trimmed.match(/^(.*):(off|minimal|low|medium|high|xhigh)$/i);
+		if (match && levels.has(match[2].toLowerCase())) return { query: match[1].trim(), thinkingLevel: match[2].toLowerCase() };
+		return { query: trimmed };
+	}
+
+	async function compactFromTelegram(chatId: number, customInstructions: string, ctx: ExtensionContext): Promise<void> {
+		if (!ctx.isIdle()) {
+			send({ type: "telegram-text", chatId, text: "Cannot compact while pi is busy. Try again after the current response finishes." });
+			return;
+		}
+		send({ type: "telegram-text", chatId, text: "Compacting pi session..." });
+		ctx.compact({
+			customInstructions: customInstructions.trim() || undefined,
+			onComplete: (result) => send({ type: "telegram-text", chatId, text: `Compaction completed. Tokens before: ${result.tokensBefore ?? "unknown"}.` }),
+			onError: (error) => send({ type: "telegram-text", chatId, text: `Compaction failed: ${error instanceof Error ? error.message : String(error)}` }),
+		});
+	}
+
+	async function modelFromTelegram(chatId: number, args: string, ctx: ExtensionContext): Promise<void> {
+		if (!ctx.isIdle()) {
+			send({ type: "telegram-text", chatId, text: "Cannot change model while pi is busy. Try again after the current response finishes." });
+			return;
+		}
+		const available = ctx.modelRegistry.getAvailable();
+		if (available.length === 0) {
+			send({ type: "telegram-text", chatId, text: "No configured models available. Run /login or configure models.json in pi first." });
+			return;
+		}
+		const trimmed = args.trim();
+		if (trimmed === "list") {
+			send({ type: "telegram-text", chatId, text: `Available models:\n${available.map(modelLabel).join("\n")}` });
+			return;
+		}
+		let target = undefined as (typeof available)[number] | undefined;
+		let thinkingLevel: string | undefined;
+		if (!trimmed || trimmed === "next" || trimmed === "cycle") {
+			const current = ctx.model;
+			const index = current ? available.findIndex((m) => m.provider === current.provider && m.id === current.id) : -1;
+			target = available[(index + 1 + available.length) % available.length];
+		} else {
+			const parsed = parseModelSpec(trimmed);
+			thinkingLevel = parsed.thinkingLevel;
+			const query = parsed.query.toLowerCase();
+			const slash = parsed.query.indexOf("/");
+			if (slash > 0) target = ctx.modelRegistry.find(parsed.query.slice(0, slash), parsed.query.slice(slash + 1));
+			if (!target) {
+				const matches = available.filter((m) => {
+					const full = `${m.provider}/${m.id}`.toLowerCase();
+					return full === query || m.id.toLowerCase() === query || full.includes(query) || (m.name ?? "").toLowerCase().includes(query);
+				});
+				if (matches.length === 1) target = matches[0];
+				else if (matches.length > 1) {
+					send({ type: "telegram-text", chatId, text: `Multiple matches. Be more specific:\n${matches.slice(0, 30).map(modelLabel).join("\n")}` });
+					return;
+				}
+			}
+		}
+		if (!target) {
+			send({ type: "telegram-text", chatId, text: "Model not found. Use /model list or /model <provider/model>." });
+			return;
+		}
+		const ok = await pi.setModel(target);
+		if (!ok) {
+			send({ type: "telegram-text", chatId, text: `Cannot use ${modelLabel(target)}: missing API key/auth.` });
+			return;
+		}
+		if (thinkingLevel) pi.setThinkingLevel(thinkingLevel as never);
+		send({ type: "telegram-text", chatId, text: `Model changed to ${modelLabel(target)}${thinkingLevel ? ` (${thinkingLevel})` : ""}.` });
 	}
 
 	async function handleServerMessage(raw: string, ctx: ExtensionContext): Promise<void> {
@@ -308,8 +407,44 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (msg.type === "prompt") {
-			queuedTurns.push({ chatId: Number(msg.chatId), text: String(msg.text || ""), files: (msg.files as IncomingFile[]) || [], queuedAttachments: [] });
+			const messageKey = typeof msg.messageKey === "string" ? msg.messageKey : undefined;
+			if (messageKey) {
+				if (seenPromptKeys.has(messageKey)) return;
+				seenPromptKeys.add(messageKey);
+				if (seenPromptKeys.size > 1_000) {
+					const oldest = seenPromptKeys.values().next().value;
+					if (oldest !== undefined) seenPromptKeys.delete(oldest);
+				}
+			}
+			queuedTurns.push({ chatId: Number(msg.chatId), messageKey, text: String(msg.text || ""), files: (msg.files as IncomingFile[]) || [], queuedAttachments: [] });
 			await dispatchNext(ctx);
+		}
+		if (msg.type === "compact-session") {
+			await compactFromTelegram(Number(msg.chatId), typeof msg.customInstructions === "string" ? msg.customInstructions : "", ctx);
+			return;
+		}
+		if (msg.type === "model-session") {
+			await modelFromTelegram(Number(msg.chatId), typeof msg.args === "string" ? msg.args : "", ctx);
+			return;
+		}
+		if (msg.type === "new-session") {
+			const chatId = Number(msg.chatId);
+			const commandCtx = ctx as ExtensionCommandContext;
+			if (!ctx.isIdle()) {
+				send({ type: "telegram-text", chatId, text: "Cannot start a new pi session while the agent is busy. Try again after the current response finishes." });
+				return;
+			}
+			if (typeof commandCtx.newSession !== "function") {
+				send({ type: "telegram-text", chatId, text: "This pi context cannot start a new session right now." });
+				return;
+			}
+			try {
+				const result = await commandCtx.newSession();
+				send({ type: "telegram-text", chatId, text: result.cancelled ? "New pi session cancelled." : `Started a new pi session in ${ctx.cwd}.` });
+			} catch (error) {
+				send({ type: "telegram-text", chatId, text: `Failed to start a new pi session: ${error instanceof Error ? error.message : String(error)}` });
+			}
+			return;
 		}
 		if (msg.type === "pending-list") {
 			const users = (msg.pendingUsers as PendingTelegramUser[] | undefined) ?? [];
@@ -423,6 +558,7 @@ export default function (pi: ExtensionAPI) {
 				const m = event.messages[i];
 				if (isAssistantMessage(m)) { finalText = getMessageText(m).trim() || finalText; break; }
 			}
+			finalText = finalText || agentEndErrorText(event) || "⚠️ pi finished without producing a reply.";
 			send({ type: "assistant", chatId: turn.chatId, text: finalText, files: turn.queuedAttachments });
 		}
 		await dispatchNext(ctx);
