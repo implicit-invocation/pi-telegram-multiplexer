@@ -64,6 +64,12 @@ The extension reconnects with backoff if the websocket closes, and starts a fres
 
 `/connect` accepts an active absolute workspace, a path relative to the configured workspaces root, or a new path. If the folder does not exist, the bot sends an inline **Create and connect** button, plus a fallback `/confirm <id>` command, before creating it and starting pi.
 
+`/new` starts a fresh pi session in the currently connected workspace.
+
+`/compact [instructions]` compacts the currently connected pi session. Optional instructions are passed to pi's compaction flow.
+
+`/model` cycles to the next configured model for the connected pi session. Use `/model list` to list available models, `/model <provider/model>` to select one directly, or `/model <provider/model>:<thinking>` to also set the thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`).
+
 `/kill` stops the currently connected workspace's pi instance. It is refused when that instance is the last connected pi instance, so the bot cannot orphan itself with no controllable pi processes.
 
 Once a chat is connected to a workspace, text and attachments sent to that chat are forwarded to the pi instance in that workspace. While pi is working, the bot sends Telegram `typing` chat actions to connected chats. Pi replies and files queued with `telemulti_attach` are broadcast to all Telegram chats connected to the same workspace.
